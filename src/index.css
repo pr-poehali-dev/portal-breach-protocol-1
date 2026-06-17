@@ -99,14 +99,16 @@
   }
 
   body {
-    @apply bg-background text-foreground font-body;
+    @apply bg-background text-foreground;
+    font-family: "Rubik", sans-serif;
   }
   h1,
   h2,
   h3,
-  h4,
-  .font-display {
-    @apply font-display uppercase tracking-wide;
+  h4 {
+    font-family: "Oswald", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
   }
 }
 
