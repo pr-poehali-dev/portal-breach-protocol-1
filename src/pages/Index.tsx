@@ -336,29 +336,22 @@ export default function Index() {
         </div>
       </section>
 
-      {/* DOWNLOAD */}
+      {/* PLAY NOW CTA */}
       <section id="download" className="py-24 relative overflow-hidden grid-bg">
         <div className="absolute left-1/4 top-0 w-80 h-80 rounded-full bg-portal-blue/20 animate-glow-pulse" />
         <div className="absolute right-1/4 bottom-0 w-80 h-80 rounded-full bg-portal-orange/20 animate-glow-pulse" style={{ animationDelay: '2s' }} />
         <div className="container relative z-10 text-center">
           <h2 className="text-4xl md:text-7xl font-display mb-4">Войди в <span className="text-portal-blue text-glow-blue">портал</span></h2>
-          <p className="text-muted-foreground font-body max-w-xl mx-auto mb-12">Выбери платформу и начни прохождение комплекса Anomaly Dynamics уже сегодня.</p>
-          <div className="grid sm:grid-cols-3 gap-5 max-w-3xl mx-auto">
-            {DOWNLOADS.map((d, i) => (
-              <div
-                key={d.name}
-                className="group p-7 rounded-xl bg-card border border-border hover:border-portal-blue/60 transition-all hover-scale animate-scale-in"
-                style={{ animationDelay: `${i * 0.1}s` }}
-              >
-                <Icon name={d.icon} size={36} className="mx-auto mb-4 text-portal-blue group-hover:text-portal-orange transition-colors" />
-                <h3 className="text-xl mb-1">{d.name}</h3>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-4">{d.desc}</p>
-                <Button className="w-full bg-portal-blue text-primary-foreground hover:bg-portal-blue/90 font-display tracking-wide">
-                  {d.price}
-                </Button>
-              </div>
-            ))}
+          <p className="text-muted-foreground font-body max-w-xl mx-auto mb-10">214 тестовых камер. Физика. Враги. Прямо в браузере — без установки.</p>
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <Button size="lg" onClick={() => navigate('/play')} className="bg-portal-blue text-primary-foreground hover:bg-portal-blue/90 glow-blue font-display tracking-wide text-lg h-14 px-12">
+              <Icon name="Gamepad2" className="mr-3" size={22} /> Играть бесплатно
+            </Button>
+            <Button size="lg" variant="outline" onClick={() => scrollTo('about')} className="border-white/20 text-white/70 hover:bg-white/10 font-display tracking-wide text-lg h-14 px-10">
+              <Icon name="Info" className="mr-3" size={22} /> О игре
+            </Button>
           </div>
+          <p className="text-white/25 text-xs font-mono mt-6 uppercase tracking-widest">Уровень 1 из 214 · Anomaly Dynamics Test Complex</p>
         </div>
       </section>
 

@@ -1,18 +1,19 @@
 import * as THREE from 'three';
+import { LEVELS, LevelDef } from './levels';
 
 export interface Portal {
   mesh: THREE.Mesh;
   ring: THREE.Mesh;
+  glow: THREE.PointLight;
   normal: THREE.Vector3;
   position: THREE.Vector3;
   color: 'blue' | 'orange';
   linked: Portal | null;
 }
 
-export interface Wall {
+export interface WallPanel {
   mesh: THREE.Mesh;
   normal: THREE.Vector3;
-  canPortal: boolean;
 }
 
 export class GameEngine {
@@ -21,59 +22,64 @@ export class GameEngine {
   camera: THREE.PerspectiveCamera;
   clock: THREE.Clock;
 
-  // Physics
-  velocity: THREE.Vector3 = new THREE.Vector3();
+  velocity = new THREE.Vector3();
   onGround = false;
-  gravity = -18;
+  gravity = -20;
   speed = 7;
-  jumpForce = 8;
+  jumpForce = 9;
 
-  // Player
-  playerHeight = 1.75;
-  playerRadius = 0.4;
-  playerPos: THREE.Vector3 = new THREE.Vector3(0, 1.75, 8);
+  playerHeight = 1.7;
+  playerRadius = 0.35;
+  playerPos = new THREE.Vector3();
 
-  // Mouse look
   yaw = 0;
   pitch = 0;
   isPointerLocked = false;
 
-  // Keys
   keys: Record<string, boolean> = {};
 
-  // Portals
   bluePortal: Portal | null = null;
   orangePortal: Portal | null = null;
   portalCooldown = 0;
+  justTeleported = false;
+  teleportTimer = 0;
 
-  // Level geometry
-  walls: Wall[] = [];
+  walls: WallPanel[] = [];
   collidables: THREE.Mesh[] = [];
+  currentLevel = 0;
+  exitMesh: THREE.Mesh | null = null;
+  exitLight: THREE.PointLight | null = null;
+  levelObjects: THREE.Object3D[] = [];
 
-  // Raycaster
   raycaster = new THREE.Raycaster();
-
-  // Crosshair dot
-  crosshairEl: HTMLDivElement | null = null;
-
-  // HUD
-  hudEl: HTMLDivElement | null = null;
-
   animId = 0;
   isRunning = false;
 
+  onLevelComplete?: (lvl: number) => void;
+  onLevelChange?: (lvl: number) => void;
+
+  // Portal 2 style materials
+  private matWall = new THREE.MeshStandardMaterial({ color: 0x8a9eae, roughness: 0.88, metalness: 0.04 });
+  private matWallDark = new THREE.MeshStandardMaterial({ color: 0x181f2e, roughness: 0.92, metalness: 0.12 });
+  private matPanel = new THREE.MeshStandardMaterial({ color: 0xd8e8f2, roughness: 0.52, metalness: 0.06 });
+  private matFloor = new THREE.MeshStandardMaterial({ color: 0x252f40, roughness: 0.92, metalness: 0.18 });
+  private matPlatform = new THREE.MeshStandardMaterial({ color: 0x384560, roughness: 0.72, metalness: 0.42 });
+  private matMetal = new THREE.MeshStandardMaterial({ color: 0x4a5c70, roughness: 0.38, metalness: 0.92 });
+  private matExitFrame = new THREE.MeshStandardMaterial({ color: 0x354555, roughness: 0.5, metalness: 0.85 });
+
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.9;
+    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x0a0e1a, 0.035);
+    this.scene.background = new THREE.Color(0x060c18);
 
-    this.camera = new THREE.PerspectiveCamera(75, 1, 0.05, 200);
+    this.camera = new THREE.PerspectiveCamera(80, 1, 0.05, 300);
     this.clock = new THREE.Clock();
   }
 
@@ -83,402 +89,463 @@ export class GameEngine {
     this.camera.updateProjectionMatrix();
   }
 
-  buildLevel() {
-    // Ambient
-    const ambient = new THREE.AmbientLight(0x1a2040, 1.2);
-    this.scene.add(ambient);
+  loadLevel(index: number) {
+    // Cleanup
+    for (const o of this.levelObjects) this.scene.remove(o);
+    this.levelObjects = [];
+    this.walls = [];
+    this.collidables = [];
+    if (this.bluePortal) { this.scene.remove(this.bluePortal.mesh, this.bluePortal.ring, this.bluePortal.glow); this.bluePortal = null; }
+    if (this.orangePortal) { this.scene.remove(this.orangePortal.mesh, this.orangePortal.ring, this.orangePortal.glow); this.orangePortal = null; }
 
-    // Main directional light (simulated lab ceiling)
-    const dir = new THREE.DirectionalLight(0xb0c8ff, 0.6);
-    dir.position.set(5, 20, 5);
-    dir.castShadow = true;
-    dir.shadow.mapSize.set(2048, 2048);
-    dir.shadow.camera.far = 80;
-    dir.shadow.camera.left = -40;
-    dir.shadow.camera.right = 40;
-    dir.shadow.camera.top = 40;
-    dir.shadow.camera.bottom = -40;
-    this.scene.add(dir);
+    this.currentLevel = index;
+    const def = LEVELS[index];
 
-    this._buildRoom(
-      new THREE.Vector3(0, 0, 0),
-      30, 6, 30,
-      true, true
-    );
+    this.playerPos.set(def.playerStart.x, def.roomH * 0.5, def.playerStart.z);
+    this.velocity.set(0, 0, 0);
+    this.yaw = Math.PI;
+    this.pitch = 0;
 
-    this._addCeilingLights(new THREE.Vector3(0, 5.8, 0), 6, 3);
+    this.scene.fog = new THREE.FogExp2(0x08101e, 0.016 + index * 0.00005);
 
-    // Platforms
-    this._addBox(new THREE.Vector3(-6, 1, -4), new THREE.Vector3(4, 0.3, 4), 0x2a3050, false);
-    this._addBox(new THREE.Vector3(6, 2.5, -8), new THREE.Vector3(4, 0.3, 4), 0x2a3050, false);
-    this._addBox(new THREE.Vector3(0, 4, -12), new THREE.Vector3(5, 0.3, 3), 0x1e2840, false);
+    this._buildRoom(def);
+    this._buildPlatforms(def);
+    this._buildPortalPanels(def);
+    this._buildExit(def);
+    this._buildLighting(def);
 
-    // Central pillar
-    this._addBox(new THREE.Vector3(0, 3, 0), new THREE.Vector3(1.5, 6, 1.5), 0x1e2840, false);
-
-    // Portal-able walls (bright white panels)
-    this._addPortalWall(new THREE.Vector3(-14.9, 3, 0), new THREE.Vector3(0.2, 5, 12), new THREE.Vector3(1, 0, 0), 0xd0ddf0);
-    this._addPortalWall(new THREE.Vector3(14.9, 3, 0), new THREE.Vector3(0.2, 5, 12), new THREE.Vector3(-1, 0, 0), 0xd0ddf0);
-    this._addPortalWall(new THREE.Vector3(0, 3, -14.9), new THREE.Vector3(12, 5, 0.2), new THREE.Vector3(0, 0, 1), 0xd0ddf0);
-    this._addPortalWall(new THREE.Vector3(0, 3, 14.9), new THREE.Vector3(12, 5, 0.2), new THREE.Vector3(0, 0, -1), 0xd0ddf0);
-
-    // Grating floor accent
-    this._addBox(new THREE.Vector3(0, 0.01, 0), new THREE.Vector3(29.5, 0.02, 29.5), 0x0d1020, false);
-
-    // Exit door
-    this._addGlowDoor(new THREE.Vector3(0, 1.5, -14.5));
-
-    // Decorative pipes
-    for (let i = -10; i <= 10; i += 5) {
-      this._addPipe(new THREE.Vector3(i, 5.5, -14), 0.12, 6, 0x334060);
-    }
+    this.onLevelChange?.(index);
   }
 
-  private _buildRoom(
-    center: THREE.Vector3,
-    w: number, h: number, d: number,
-    hasFloor: boolean, hasCeiling: boolean
-  ) {
-    const mat = new THREE.MeshStandardMaterial({ color: 0x1a2035, roughness: 0.85, metalness: 0.1 });
-    const brightMat = new THREE.MeshStandardMaterial({ color: 0xc8d8f0, roughness: 0.7, metalness: 0.05 });
+  private _add(obj: THREE.Object3D) {
+    this.scene.add(obj);
+    this.levelObjects.push(obj);
+    return obj;
+  }
 
-    const add = (geo: THREE.BoxGeometry, pos: THREE.Vector3, m: THREE.Material) => {
-      const mesh = new THREE.Mesh(geo, m);
-      mesh.position.copy(pos);
-      mesh.receiveShadow = true;
-      this.scene.add(mesh);
-      this.collidables.push(mesh);
-    };
+  private _buildRoom(def: LevelDef) {
+    const { roomW: W, roomH: H, roomD: D } = def;
+    const hw = W / 2, hd = D / 2;
 
     // Floor
-    if (hasFloor) {
-      add(new THREE.BoxGeometry(w, 0.4, d), new THREE.Vector3(center.x, center.y - 0.2, center.z), mat);
-    }
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(W, 0.5, D), this.matFloor);
+    floor.position.set(0, -0.25, 0);
+    floor.receiveShadow = true;
+    this._add(floor); this.collidables.push(floor);
+
     // Ceiling
-    if (hasCeiling) {
-      add(new THREE.BoxGeometry(w, 0.4, d), new THREE.Vector3(center.x, center.y + h + 0.2, center.z), mat);
+    const ceiling = new THREE.Mesh(new THREE.BoxGeometry(W, 0.5, D), this.matWallDark);
+    ceiling.position.set(0, H + 0.25, 0);
+    this._add(ceiling); this.collidables.push(ceiling);
+
+    // Segmented walls — Portal 2 tile look
+    this._buildWallGrid(-hw, H, D, 'x', 1);
+    this._buildWallGrid(hw, H, D, 'x', -1);
+    this._buildWallGrid(-hd, H, W, 'z', 1);
+    this._buildWallGrid(hd, H, W, 'z', -1);
+
+    // Floor metal strips
+    const stripMat = new THREE.MeshStandardMaterial({ color: 0x18222e, roughness: 0.6, metalness: 0.8 });
+    for (let i = -Math.floor(W / 2); i <= Math.floor(W / 2); i += 3) {
+      const s = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.01, D), stripMat);
+      s.position.set(i, 0.01, 0); this._add(s);
     }
-    // Walls
-    add(new THREE.BoxGeometry(0.4, h, d), new THREE.Vector3(center.x - w / 2, center.y + h / 2, center.z), mat);
-    add(new THREE.BoxGeometry(0.4, h, d), new THREE.Vector3(center.x + w / 2, center.y + h / 2, center.z), mat);
-    add(new THREE.BoxGeometry(w, h, 0.4), new THREE.Vector3(center.x, center.y + h / 2, center.z - d / 2), brightMat);
-    add(new THREE.BoxGeometry(w, h, 0.4), new THREE.Vector3(center.x, center.y + h / 2, center.z + d / 2), mat);
-  }
-
-  private _addPortalWall(pos: THREE.Vector3, size: THREE.Vector3, normal: THREE.Vector3, color: number) {
-    const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
-    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.05 });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(pos);
-    mesh.receiveShadow = true;
-    this.scene.add(mesh);
-    this.walls.push({ mesh, normal: normal.clone(), canPortal: true });
-    this.collidables.push(mesh);
-  }
-
-  private _addBox(pos: THREE.Vector3, size: THREE.Vector3, color: number, canPortal: boolean) {
-    const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
-    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: 0.15 });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(pos);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    this.scene.add(mesh);
-    this.collidables.push(mesh);
-    if (canPortal) {
-      this.walls.push({ mesh, normal: new THREE.Vector3(0, 1, 0), canPortal: true });
+    for (let i = -Math.floor(D / 2); i <= Math.floor(D / 2); i += 3) {
+      const s = new THREE.Mesh(new THREE.BoxGeometry(W, 0.01, 0.05), stripMat);
+      s.position.set(0, 0.01, i); this._add(s);
     }
   }
 
-  private _addCeilingLights(center: THREE.Vector3, rows: number, cols: number) {
+  private _buildWallGrid(offset: number, H: number, len: number, axis: 'x' | 'z', normalDir: number) {
+    const segW = 2.2, segH = 2.2;
+    const cols = Math.ceil(len / segW);
+    const rows = Math.ceil(H / segH);
+
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const x = center.x + (c - (cols - 1) / 2) * 9;
-        const z = center.z + (r - (rows - 1) / 2) * 9;
+        const u = (c - (cols - 1) / 2) * segW;
+        const v = (r + 0.5) * segH;
+        const variant = (r + c) % 4;
+        const mat = variant === 0 ? this.matWallDark : this.matWall;
+        const thickness = 0.28;
 
-        const light = new THREE.PointLight(0x8ab4ff, 1.5, 14);
-        light.position.set(x, center.y, z);
-        this.scene.add(light);
+        const geo = new THREE.BoxGeometry(
+          axis === 'x' ? thickness : segW - 0.07,
+          segH - 0.07,
+          axis === 'z' ? thickness : segW - 0.07
+        );
+        const m = new THREE.Mesh(geo, mat);
+        if (axis === 'x') m.position.set(offset, v, u);
+        else m.position.set(u, v, offset);
+        m.receiveShadow = true;
+        this._add(m);
+        this.collidables.push(m);
+      }
+    }
 
-        const panelGeo = new THREE.BoxGeometry(1.8, 0.05, 0.6);
-        const panelMat = new THREE.MeshStandardMaterial({
-          color: 0x9bbfff, emissive: 0x4488cc, emissiveIntensity: 1.2, roughness: 1
-        });
-        const panel = new THREE.Mesh(panelGeo, panelMat);
-        panel.position.set(x, center.y, z);
-        this.scene.add(panel);
+    // Solid backing for collision
+    const backing = new THREE.Mesh(
+      new THREE.BoxGeometry(axis === 'x' ? 0.08 : len, H, axis === 'z' ? 0.08 : len),
+      this.matWallDark
+    );
+    backing.position.set(axis === 'x' ? offset : 0, H / 2, axis === 'z' ? offset : 0);
+    this._add(backing);
+    this.collidables.push(backing);
+
+    const n = new THREE.Vector3(axis === 'x' ? normalDir : 0, 0, axis === 'z' ? normalDir : 0);
+    this.walls.push({ mesh: backing, normal: n });
+  }
+
+  private _buildPlatforms(def: LevelDef) {
+    for (const p of def.platforms) {
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(p.w, 0.24, p.d), this.matPlatform);
+      slab.position.set(p.x, p.y, p.z);
+      slab.castShadow = true; slab.receiveShadow = true;
+      this._add(slab); this.collidables.push(slab);
+
+      // Glowing edge trim
+      const trimMat = new THREE.MeshStandardMaterial({ color: 0x4a7090, emissive: new THREE.Color(0x1a3050), emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.8 });
+      const trim = new THREE.Mesh(new THREE.BoxGeometry(p.w + 0.05, 0.05, p.d + 0.05), trimMat);
+      trim.position.set(p.x, p.y + 0.145, p.z);
+      this._add(trim);
+
+      // Support beams
+      if (p.y > 0.6) {
+        for (const [dx, dz] of [[-p.w / 2 + 0.15, 0], [p.w / 2 - 0.15, 0]]) {
+          const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, p.y, 8), this.matMetal);
+          leg.position.set(p.x + dx, p.y / 2, p.z + dz);
+          this._add(leg);
+        }
       }
     }
   }
 
-  private _addGlowDoor(pos: THREE.Vector3) {
-    const frameGeo = new THREE.BoxGeometry(2.4, 3.2, 0.15);
-    const frameMat = new THREE.MeshStandardMaterial({ color: 0x334060, roughness: 0.5, metalness: 0.7 });
-    const frame = new THREE.Mesh(frameGeo, frameMat);
-    frame.position.copy(pos);
-    this.scene.add(frame);
+  private _buildPortalPanels(def: LevelDef) {
+    for (const p of def.extraPanels) {
+      const normal = new THREE.Vector3(p.nx, p.ny, p.nz);
+      const geo = new THREE.BoxGeometry(
+        p.nx !== 0 ? 0.16 : p.pw,
+        p.ny !== 0 ? 0.16 : p.ph,
+        p.nz !== 0 ? 0.16 : p.pw
+      );
+      const mat = this.matPanel.clone();
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(p.x, p.y, p.z);
+      mesh.receiveShadow = true;
+      this._add(mesh);
+      this.walls.push({ mesh, normal });
+      this.collidables.push(mesh);
 
-    const innerGeo = new THREE.BoxGeometry(1.8, 2.8, 0.05);
-    const innerMat = new THREE.MeshStandardMaterial({
-      color: 0x00ff88, emissive: 0x00ff44, emissiveIntensity: 0.8,
-      transparent: true, opacity: 0.6
+      // Panel border frame
+      const borderMat = new THREE.MeshStandardMaterial({ color: 0x7799bb, roughness: 0.45, metalness: 0.6 });
+      const bGeo = new THREE.BoxGeometry(
+        p.nx !== 0 ? 0.04 : p.pw + 0.12,
+        p.ny !== 0 ? 0.04 : p.ph + 0.12,
+        p.nz !== 0 ? 0.04 : p.pw + 0.12
+      );
+      const border = new THREE.Mesh(bGeo, borderMat);
+      border.position.set(p.x - p.nx * 0.05, p.y, p.z - p.nz * 0.05);
+      this._add(border);
+    }
+  }
+
+  private _buildExit(def: LevelDef) {
+    const { x: ex, z: ez } = def.exitPos;
+
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(2.3, 3.1, 0.25), this.matExitFrame);
+    frame.position.set(ex, 1.55, ez);
+    this._add(frame);
+
+    const doorMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff99, emissive: new THREE.Color(0x00ee55), emissiveIntensity: 1.0,
+      transparent: true, opacity: 0.65
     });
-    const inner = new THREE.Mesh(innerGeo, innerMat);
-    inner.position.copy(pos);
-    inner.position.z += 0.05;
-    this.scene.add(inner);
+    const door = new THREE.Mesh(new THREE.BoxGeometry(1.65, 2.65, 0.07), doorMat);
+    door.position.set(ex, 1.55, ez + 0.12);
+    this.exitMesh = door;
+    this._add(door);
 
-    const glow = new THREE.PointLight(0x00ff88, 2, 5);
-    glow.position.copy(pos);
-    this.scene.add(glow);
+    const light = new THREE.PointLight(0x00ff88, 3.5, 7);
+    light.position.set(ex, 2, ez + 0.8);
+    this.exitLight = light;
+    this._add(light);
+
+    // Floor ring marker
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.75, 48), new THREE.MeshStandardMaterial({ color: 0x00ff88, emissive: new THREE.Color(0x00cc55), emissiveIntensity: 0.7, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(ex, 0.02, ez);
+    this._add(ring);
+
+    // Arrow trail
+    for (let i = 1; i <= 4; i++) {
+      const arMat = new THREE.MeshStandardMaterial({ color: 0x00ff99, emissive: new THREE.Color(0x00cc44), emissiveIntensity: 0.3 + i * 0.15 });
+      const ar = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.01, 0.3), arMat);
+      ar.position.set(ex, 0.02, ez + i * 0.8);
+      this._add(ar);
+    }
+
+    // Level number display
+    const numMat = new THREE.MeshStandardMaterial({ color: 0x88ddff, emissive: new THREE.Color(0x3388cc), emissiveIntensity: 0.8, roughness: 0.3, metalness: 0.5 });
+    const numPlate = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.35, 0.04), numMat);
+    numPlate.position.set(ex, 3.4, ez + 0.14);
+    this._add(numPlate);
   }
 
-  private _addPipe(pos: THREE.Vector3, radius: number, length: number, color: number) {
-    const geo = new THREE.CylinderGeometry(radius, radius, length, 8);
-    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.8 });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(pos);
-    mesh.rotation.z = Math.PI / 2;
-    this.scene.add(mesh);
+  private _buildLighting(def: LevelDef) {
+    const { roomW: W, roomH: H, roomD: D } = def;
+
+    this._add(new THREE.AmbientLight(0x1a2840, 0.7));
+
+    // Ceiling fluorescent strips (Portal 2 signature)
+    const stripMat = new THREE.MeshStandardMaterial({
+      color: 0xaaccff, emissive: new THREE.Color(0x5588cc), emissiveIntensity: 1.8, roughness: 1
+    });
+    const lRows = Math.max(2, Math.ceil(D / 7));
+    const lCols = Math.max(2, Math.ceil(W / 8));
+    for (let r = 0; r < lRows; r++) {
+      for (let c = 0; c < lCols; c++) {
+        const lx = (c / (lCols - 1) - 0.5) * (W - 4);
+        const lz = (r / (lRows - 1) - 0.5) * (D - 4);
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.03, 2.8), stripMat);
+        strip.position.set(lx, H - 0.03, lz);
+        this._add(strip);
+        const pl = new THREE.PointLight(0x7799ee, 1.1, 14);
+        pl.position.set(lx, H - 0.35, lz);
+        this._add(pl);
+      }
+    }
+
+    // Main shadow caster
+    const sun = new THREE.DirectionalLight(0x7080a0, 0.45);
+    sun.position.set(W / 4, H, D / 4);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(1024, 1024);
+    sun.shadow.camera.far = Math.max(W, H, D) * 2.5;
+    sun.shadow.camera.left = -W; sun.shadow.camera.right = W;
+    sun.shadow.camera.top = D; sun.shadow.camera.bottom = -D;
+    this._add(sun);
+
+    // Colored wall accents
+    const bl = new THREE.PointLight(0x1133ff, 0.5, W * 0.9);
+    bl.position.set(-W / 2 + 2, H / 2, 0);
+    this._add(bl);
+    const ol = new THREE.PointLight(0xff5500, 0.35, W * 0.7);
+    ol.position.set(W / 2 - 2, H / 2, 0);
+    this._add(ol);
   }
 
-  // Portal creation
+  // ─── Portal ────────────────────────────────────────────────────
   shootPortal(color: 'blue' | 'orange') {
     if (this.portalCooldown > 0) return;
-    this.portalCooldown = 0.3;
+    this.portalCooldown = 0.22;
 
-    const center = new THREE.Vector2(0, 0);
-    this.raycaster.setFromCamera(center, this.camera);
+    this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+    const hits = this.raycaster.intersectObjects(this.walls.map(w => w.mesh));
+    if (!hits.length) return;
 
-    const portalSurfaces = this.walls.filter(w => w.canPortal).map(w => w.mesh);
-    const hits = this.raycaster.intersectObjects(portalSurfaces);
-
-    if (hits.length === 0) return;
-
-    const hit = hits[0];
-    const wall = this.walls.find(w => w.mesh === hit.object);
+    const wall = this.walls.find(w => w.mesh === hits[0].object);
     if (!wall) return;
+    const pos = hits[0].point.clone().addScaledVector(wall.normal, 0.06);
 
-    const pos = hit.point.clone().addScaledVector(wall.normal, 0.05);
+    if (color === 'blue' && this.bluePortal) this._removePortal(this.bluePortal);
+    if (color === 'orange' && this.orangePortal) this._removePortal(this.orangePortal);
 
-    // Remove old portal
-    if (color === 'blue' && this.bluePortal) {
-      this.scene.remove(this.bluePortal.mesh);
-      this.scene.remove(this.bluePortal.ring);
-    }
-    if (color === 'orange' && this.orangePortal) {
-      this.scene.remove(this.orangePortal.mesh);
-      this.scene.remove(this.orangePortal.ring);
-    }
-
-    const portal = this._createPortalMesh(pos, wall.normal, color);
-
+    const portal = this._spawnPortal(pos, wall.normal, color);
     if (color === 'blue') {
       this.bluePortal = portal;
-      if (this.orangePortal) {
-        this.bluePortal.linked = this.orangePortal;
-        this.orangePortal.linked = this.bluePortal;
-      }
+      if (this.orangePortal) { portal.linked = this.orangePortal; this.orangePortal.linked = portal; }
     } else {
       this.orangePortal = portal;
-      if (this.bluePortal) {
-        this.orangePortal.linked = this.bluePortal;
-        this.bluePortal.linked = this.orangePortal;
-      }
+      if (this.bluePortal) { portal.linked = this.bluePortal; this.bluePortal.linked = portal; }
     }
   }
 
-  private _createPortalMesh(pos: THREE.Vector3, normal: THREE.Vector3, color: 'blue' | 'orange'): Portal {
-    const col = color === 'blue' ? 0x00aaff : 0xff6600;
-    const emissive = color === 'blue' ? 0x0055ff : 0xff3300;
+  private _removePortal(p: Portal) {
+    this.scene.remove(p.mesh, p.ring, p.glow);
+    this.levelObjects = this.levelObjects.filter(o => o !== p.mesh && o !== p.ring && o !== p.glow);
+  }
 
-    // Portal oval
-    const geo = new THREE.CircleGeometry(0.85, 32);
+  private _spawnPortal(pos: THREE.Vector3, normal: THREE.Vector3, color: 'blue' | 'orange'): Portal {
+    const isBlue = color === 'blue';
+    const col = isBlue ? 0x00aaff : 0xff6600;
+    const emissiveCol = isBlue ? new THREE.Color(0x0044ee) : new THREE.Color(0xff3300);
+
+    // Ellipse (Portal 2 shape — taller oval)
+    const shape = new THREE.Shape();
+    shape.absellipse(0, 0, 0.7, 0.98, 0, Math.PI * 2);
+    const geo = new THREE.ShapeGeometry(shape, 52);
     const mat = new THREE.MeshStandardMaterial({
-      color: col, emissive, emissiveIntensity: 2,
-      transparent: true, opacity: 0.55, side: THREE.DoubleSide
+      color: col, emissive: emissiveCol, emissiveIntensity: 2.8,
+      transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(pos);
     mesh.lookAt(pos.clone().add(normal));
     this.scene.add(mesh);
 
-    // Ring
-    const ringGeo = new THREE.TorusGeometry(0.88, 0.06, 8, 48);
+    // Main ring
+    const ringGeo = new THREE.TorusGeometry(0.86, 0.10, 16, 72);
     const ringMat = new THREE.MeshStandardMaterial({
-      color: col, emissive, emissiveIntensity: 3, roughness: 0.1, metalness: 0.3
+      color: col, emissive: emissiveCol, emissiveIntensity: 4.5,
+      roughness: 0.08, metalness: 0.15
     });
     const ring = new THREE.Mesh(ringGeo, ringMat);
-    ring.position.copy(pos).addScaledVector(normal, 0.02);
+    ring.position.copy(pos).addScaledVector(normal, 0.05);
     ring.lookAt(pos.clone().add(normal));
     this.scene.add(ring);
 
-    // Glow light
-    const light = new THREE.PointLight(col, 3, 4);
-    light.position.copy(pos);
-    this.scene.add(light);
+    // Outer thin ring
+    const outerGeo = new THREE.TorusGeometry(1.02, 0.025, 6, 72);
+    const outerMat = new THREE.MeshStandardMaterial({ color: col, emissive: emissiveCol, emissiveIntensity: 2.5 });
+    const outer = new THREE.Mesh(outerGeo, outerMat);
+    outer.position.copy(pos).addScaledVector(normal, 0.02);
+    outer.lookAt(pos.clone().add(normal));
+    this.scene.add(outer);
 
-    return { mesh, ring, normal: normal.clone(), position: pos.clone(), color, linked: null };
+    // Spoke details (Portal 2 has inner cross marks)
+    for (let i = 0; i < 4; i++) {
+      const spokeGeo = new THREE.BoxGeometry(0.025, 0.55, 0.015);
+      const spokeMat = new THREE.MeshStandardMaterial({ color: col, emissive: emissiveCol, emissiveIntensity: 3 });
+      const spoke = new THREE.Mesh(spokeGeo, spokeMat);
+      spoke.position.copy(pos).addScaledVector(normal, 0.07);
+      spoke.lookAt(pos.clone().add(normal));
+      spoke.rotateZ((Math.PI / 4) * i);
+      this.scene.add(spoke);
+      this.levelObjects.push(spoke);
+    }
+
+    const glow = new THREE.PointLight(col, 4.5, 5.5);
+    glow.position.copy(pos).addScaledVector(normal, 0.35);
+    this.scene.add(glow);
+
+    return { mesh, ring, glow, normal: normal.clone(), position: pos.clone(), color, linked: null };
   }
 
-  checkPortalTeleport() {
-    if (!this.bluePortal || !this.orangePortal) return;
-
-    const portals = [this.bluePortal, this.orangePortal];
-    for (const portal of portals) {
-      if (!portal.linked) continue;
-      const dist = this.playerPos.distanceTo(portal.position);
-      if (dist < 1.1) {
-        const dst = portal.linked;
-
-        // Teleport player
-        const offset = dst.normal.clone().multiplyScalar(1.5);
-        this.playerPos.copy(dst.position).add(offset);
-        this.velocity.set(0, 0, 0);
-
-        // Reorient camera to face out of destination portal
-        const fwd = dst.normal.clone();
-        this.yaw = Math.atan2(fwd.x, fwd.z);
+  private _checkPortalTeleport() {
+    if (!this.bluePortal?.linked || this.justTeleported) return;
+    for (const src of [this.bluePortal, this.orangePortal] as Portal[]) {
+      if (!src?.linked) continue;
+      if (this.playerPos.distanceTo(src.position) < 1.05) {
+        const dst = src.linked;
+        this.playerPos.copy(dst.position).addScaledVector(dst.normal, 1.9);
+        this.yaw = Math.atan2(dst.normal.x, dst.normal.z);
         this.pitch = 0;
+        this.velocity.set(0, 0, 0);
+        this.justTeleported = true;
+        this.teleportTimer = 0.45;
         break;
       }
     }
   }
 
+  private _checkExit() {
+    const def = LEVELS[this.currentLevel];
+    const { x: ex, z: ez } = def.exitPos;
+    const dx = this.playerPos.x - ex;
+    const dz = this.playerPos.z - ez;
+    if (Math.sqrt(dx * dx + dz * dz) < 1.3 && this.playerPos.y < 3.5) {
+      this.onLevelComplete?.(this.currentLevel);
+    }
+  }
+
   setupControls(container: HTMLElement) {
     container.addEventListener('click', () => container.requestPointerLock());
-
     document.addEventListener('pointerlockchange', () => {
       this.isPointerLocked = document.pointerLockElement === container;
     });
-
-    document.addEventListener('mousemove', (e) => {
+    document.addEventListener('mousemove', e => {
       if (!this.isPointerLocked) return;
-      const sens = 0.002;
-      this.yaw -= e.movementX * sens;
-      this.pitch -= e.movementY * sens;
-      this.pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, this.pitch));
+      this.yaw -= e.movementX * 0.0018;
+      this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * 0.0018));
     });
-
-    document.addEventListener('keydown', (e) => { this.keys[e.code] = true; });
-    document.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
-
-    document.addEventListener('mousedown', (e) => {
+    document.addEventListener('keydown', e => { this.keys[e.code] = true; });
+    document.addEventListener('keyup', e => { this.keys[e.code] = false; });
+    document.addEventListener('mousedown', e => {
       if (!this.isPointerLocked) return;
       if (e.button === 0) this.shootPortal('blue');
       if (e.button === 2) this.shootPortal('orange');
     });
-
-    container.addEventListener('contextmenu', (e) => e.preventDefault());
+    container.addEventListener('contextmenu', e => e.preventDefault());
   }
 
   update(dt: number) {
     if (this.portalCooldown > 0) this.portalCooldown -= dt;
+    if (this.teleportTimer > 0) {
+      this.teleportTimer -= dt;
+      if (this.teleportTimer <= 0) this.justTeleported = false;
+    }
 
-    // Camera yaw/pitch
-    const euler = new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ');
-    this.camera.quaternion.setFromEuler(euler);
+    this.camera.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
 
-    // Movement
-    const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-
     const move = new THREE.Vector3();
-    if (this.keys['KeyW'] || this.keys['ArrowUp']) move.addScaledVector(forward, 1);
-    if (this.keys['KeyS'] || this.keys['ArrowDown']) move.addScaledVector(forward, -1);
+    if (this.keys['KeyW'] || this.keys['ArrowUp']) move.addScaledVector(fwd, 1);
+    if (this.keys['KeyS'] || this.keys['ArrowDown']) move.addScaledVector(fwd, -1);
     if (this.keys['KeyA'] || this.keys['ArrowLeft']) move.addScaledVector(right, -1);
     if (this.keys['KeyD'] || this.keys['ArrowRight']) move.addScaledVector(right, 1);
     if (move.length() > 0) move.normalize();
 
-    this.velocity.x = move.x * this.speed;
-    this.velocity.z = move.z * this.speed;
+    const sprint = this.keys['ShiftLeft'] ? 1.65 : 1;
+    this.velocity.x = move.x * this.speed * sprint;
+    this.velocity.z = move.z * this.speed * sprint;
 
-    // Jump
-    if ((this.keys['Space']) && this.onGround) {
-      this.velocity.y = this.jumpForce;
-      this.onGround = false;
-    }
-
-    // Gravity
+    if (this.keys['Space'] && this.onGround) { this.velocity.y = this.jumpForce; this.onGround = false; }
     this.velocity.y += this.gravity * dt;
 
-    // Move & collide
     const newPos = this.playerPos.clone();
-    newPos.x += this.velocity.x * dt;
-    newPos.y += this.velocity.y * dt;
-    newPos.z += this.velocity.z * dt;
-
-    this._resolveCollisions(newPos);
+    newPos.addScaledVector(this.velocity, dt);
+    this._collide(newPos);
     this.playerPos.copy(newPos);
-
     this.camera.position.copy(this.playerPos);
 
-    // Portal teleport check
-    this.checkPortalTeleport();
+    this._checkPortalTeleport();
+    this._checkExit();
 
-    // Animate portal rings
+    // Portal animations
     const t = this.clock.getElapsedTime();
     if (this.bluePortal) {
-      this.bluePortal.ring.rotation.z = t * 1.2;
-      (this.bluePortal.mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.5 + Math.sin(t * 3) * 0.5;
+      this.bluePortal.ring.rotation.z = t * 0.9;
+      (this.bluePortal.mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 2.2 + Math.sin(t * 2.8) * 0.7;
+      this.bluePortal.glow.intensity = 3.5 + Math.sin(t * 2.8) * 1.2;
     }
     if (this.orangePortal) {
-      this.orangePortal.ring.rotation.z = -t * 1.2;
-      (this.orangePortal.mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.5 + Math.sin(t * 3 + 1) * 0.5;
+      this.orangePortal.ring.rotation.z = -t * 0.9;
+      (this.orangePortal.mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = 2.2 + Math.sin(t * 2.8 + 1) * 0.7;
+      this.orangePortal.glow.intensity = 3.5 + Math.sin(t * 2.8 + 1) * 1.2;
+    }
+
+    // Exit pulse
+    if (this.exitLight) this.exitLight.intensity = 2.8 + Math.sin(t * 2.5) * 1;
+    if (this.exitMesh) {
+      const m = this.exitMesh.material as THREE.MeshStandardMaterial;
+      m.emissiveIntensity = 0.85 + Math.sin(t * 1.8) * 0.3;
+      m.opacity = 0.58 + Math.sin(t * 1.3) * 0.1;
     }
   }
 
-  private _resolveCollisions(pos: THREE.Vector3) {
+  private _collide(pos: THREE.Vector3) {
     this.onGround = false;
-
+    const r = this.playerRadius, h = this.playerHeight;
     for (const mesh of this.collidables) {
-      const box = new THREE.Box3().setFromObject(mesh);
+      const { min, max } = new THREE.Box3().setFromObject(mesh);
+      const ox = pos.x - r < max.x && pos.x + r > min.x;
+      const oy = pos.y - 0.05 < max.y && pos.y + h > min.y;
+      const oz = pos.z - r < max.z && pos.z + r > min.z;
+      if (!ox || !oy || !oz) continue;
 
-      const r = this.playerRadius;
-      const h = this.playerHeight;
-
-      const px = [pos.x - r, pos.x + r];
-      const py = [pos.y - 0.1, pos.y + h];
-      const pz = [pos.z - r, pos.z + r];
-
-      const bmin = box.min;
-      const bmax = box.max;
-
-      const overlapX = px[0] < bmax.x && px[1] > bmin.x;
-      const overlapY = py[0] < bmax.y && py[1] > bmin.y;
-      const overlapZ = pz[0] < bmax.z && pz[1] > bmin.z;
-
-      if (!overlapX || !overlapY || !overlapZ) continue;
-
-      // Find smallest penetration axis
-      const dxMin = bmax.x - (pos.x - r);
-      const dxMax = (pos.x + r) - bmin.x;
-      const dyMin = bmax.y - (pos.y - 0.1);
-      const dyMax = (pos.y + h) - bmin.y;
-      const dzMin = bmax.z - (pos.z - r);
-      const dzMax = (pos.z + r) - bmin.z;
-
-      const dx = Math.min(dxMin, dxMax);
-      const dy = Math.min(dyMin, dyMax);
-      const dz = Math.min(dzMin, dzMax);
+      const dxL = max.x - (pos.x - r), dxR = (pos.x + r) - min.x;
+      const dyB = max.y - (pos.y - 0.05), dyT = (pos.y + h) - min.y;
+      const dzF = max.z - (pos.z - r), dzB = (pos.z + r) - min.z;
+      const dx = Math.min(dxL, dxR), dy = Math.min(dyB, dyT), dz = Math.min(dzF, dzB);
 
       if (dy < dx && dy < dz) {
-        if (dyMin < dyMax) {
-          pos.y = bmax.y + 0.1;
-          this.onGround = true;
-          this.velocity.y = Math.max(0, this.velocity.y);
-        } else {
-          pos.y = bmin.y - h;
-          this.velocity.y = Math.min(0, this.velocity.y);
-        }
+        if (dyB < dyT) { pos.y = max.y + 0.05; this.onGround = true; this.velocity.y = Math.max(0, this.velocity.y); }
+        else { pos.y = min.y - h; this.velocity.y = Math.min(0, this.velocity.y); }
       } else if (dx < dz) {
-        if (dxMin < dxMax) pos.x = bmax.x + r;
-        else pos.x = bmin.x - r;
-        this.velocity.x = 0;
+        pos.x += dxL < dxR ? dxL : -dxR; this.velocity.x = 0;
       } else {
-        if (dzMin < dzMax) pos.z = bmax.z + r;
-        else pos.z = bmin.z - r;
-        this.velocity.z = 0;
+        pos.z += dzF < dzB ? dzF : -dzB; this.velocity.z = 0;
       }
     }
   }
@@ -488,8 +555,7 @@ export class GameEngine {
     this.clock.start();
     const loop = () => {
       if (!this.isRunning) return;
-      const dt = Math.min(this.clock.getDelta(), 0.05);
-      this.update(dt);
+      this.update(Math.min(this.clock.getDelta(), 0.05));
       this.renderer.render(this.scene, this.camera);
       onFrame?.();
       this.animId = requestAnimationFrame(loop);
@@ -497,13 +563,6 @@ export class GameEngine {
     loop();
   }
 
-  stop() {
-    this.isRunning = false;
-    cancelAnimationFrame(this.animId);
-  }
-
-  dispose() {
-    this.stop();
-    this.renderer.dispose();
-  }
+  stop() { this.isRunning = false; cancelAnimationFrame(this.animId); }
+  dispose() { this.stop(); this.renderer.dispose(); }
 }
