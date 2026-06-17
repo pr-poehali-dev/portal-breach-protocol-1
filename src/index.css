@@ -4,33 +4,36 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card: 222 40% 9%;
+    --card-foreground: 210 40% 98%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover: 222 40% 9%;
+    --popover-foreground: 210 40% 98%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 200 100% 55%;
+    --primary-foreground: 222 47% 6%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 25 100% 55%;
+    --secondary-foreground: 222 47% 6%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 217 33% 14%;
+    --muted-foreground: 215 20% 65%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 25 100% 55%;
+    --accent-foreground: 222 47% 6%;
 
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 217 33% 18%;
+    --input: 217 33% 18%;
+    --ring: 200 100% 55%;
+
+    --portal-blue: 200 100% 55%;
+    --portal-orange: 25 100% 55%;
 
     --radius: 0.5rem;
 
@@ -96,6 +99,46 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-body;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  .font-display {
+    @apply font-display uppercase tracking-wide;
+  }
+}
+
+@layer utilities {
+  .text-portal-blue {
+    color: hsl(var(--portal-blue));
+  }
+  .text-portal-orange {
+    color: hsl(var(--portal-orange));
+  }
+  .glow-blue {
+    box-shadow: 0 0 30px hsl(var(--portal-blue) / 0.5);
+  }
+  .glow-orange {
+    box-shadow: 0 0 30px hsl(var(--portal-orange) / 0.5);
+  }
+  .text-glow-blue {
+    text-shadow: 0 0 25px hsl(var(--portal-blue) / 0.7);
+  }
+  .text-glow-orange {
+    text-shadow: 0 0 25px hsl(var(--portal-orange) / 0.7);
+  }
+  .grid-bg {
+    background-image:
+      linear-gradient(hsl(var(--border) / 0.4) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.4) 1px, transparent 1px);
+    background-size: 50px 50px;
+  }
+  .hover-scale {
+    transition: transform 0.3s ease;
+  }
+  .hover-scale:hover {
+    transform: scale(1.04);
   }
 }
