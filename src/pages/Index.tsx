@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Icon from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -70,6 +71,7 @@ const DOWNLOADS = [
 ];
 
 export default function Index() {
+  const navigate = useNavigate();
   const [levelFilter, setLevelFilter] = useState('Все');
   const [enemyFilter, setEnemyFilter] = useState('Все');
 
@@ -105,7 +107,7 @@ export default function Index() {
               </button>
             ))}
           </nav>
-          <Button onClick={() => scrollTo('download')} className="bg-portal-blue text-primary-foreground hover:bg-portal-blue/90 glow-blue font-display tracking-wide">
+          <Button onClick={() => navigate('/play')} className="bg-portal-blue text-primary-foreground hover:bg-portal-blue/90 glow-blue font-display tracking-wide">
             Играть
           </Button>
         </div>
@@ -134,11 +136,14 @@ export default function Index() {
               Головоломка-шутер от первого лица. Открывай порталы, переигрывай гравитацию и сражайся с охранными системами заброшенной лаборатории 80-х.
             </p>
             <div className="flex flex-wrap gap-4">
-              <Button size="lg" onClick={() => scrollTo('download')} className="bg-portal-orange text-secondary-foreground hover:bg-portal-orange/90 glow-orange font-display tracking-wide text-base h-12 px-8">
-                <Icon name="Download" className="mr-2" size={20} /> Скачать игру
+              <Button size="lg" onClick={() => navigate('/play')} className="bg-portal-blue text-primary-foreground hover:bg-portal-blue/90 glow-blue font-display tracking-wide text-base h-12 px-8">
+                <Icon name="Gamepad2" className="mr-2" size={20} /> Играть в браузере
               </Button>
-              <Button size="lg" variant="outline" onClick={() => scrollTo('gallery')} className="border-portal-blue/50 text-portal-blue hover:bg-portal-blue/10 font-display tracking-wide text-base h-12 px-8">
-                <Icon name="Play" className="mr-2" size={20} /> Смотреть геймплей
+              <Button size="lg" onClick={() => scrollTo('download')} className="bg-portal-orange text-secondary-foreground hover:bg-portal-orange/90 glow-orange font-display tracking-wide text-base h-12 px-8">
+                <Icon name="Download" className="mr-2" size={20} /> Скачать
+              </Button>
+              <Button size="lg" variant="outline" onClick={() => scrollTo('gallery')} className="border-white/30 text-white/70 hover:bg-white/10 font-display tracking-wide text-base h-12 px-8">
+                <Icon name="Play" className="mr-2" size={20} /> Галерея
               </Button>
             </div>
           </div>
